@@ -73,17 +73,6 @@ class Solver(object):
         self.beta1 = args.beta1
         self.beta2 = args.beta2
 
-        if args.dataset.lower() == 'dsprites':
-            self.nc = 1
-            self.decoder_dist = 'bernoulli'
-        elif args.dataset.lower() == '3dchairs':
-            self.nc = 3
-            self.decoder_dist = 'gaussian'
-        elif args.dataset.lower() == 'celeba':
-            self.nc = 3
-            self.decoder_dist = 'gaussian'
-        else:
-            raise NotImplementedError
 
         if args.model == 'H':
             net = BetaVAE_H
@@ -97,7 +86,7 @@ class Solver(object):
                                     betas=(self.beta1, self.beta2))
         
         
-        self.ckpt_dir = os.path.join(args.ckpt_dir, args.viz_name)
+        self.ckpt_dir = os.path.join(args.ckpt_dir, args.viz_name)#
         if not os.path.exists(self.ckpt_dir):
             os.makedirs(self.ckpt_dir, exist_ok=True)
         self.ckpt_name = args.ckpt_name
