@@ -71,7 +71,7 @@ class BetaVAE_H(nn.Module):
         z = reparametrize(mu, logvar)#sampling
         x_recon = self._decode(z)
 
-        return x_recon, mu, logvar
+        return x_recon, mu, logvar, z
 
     def _encode(self, x):
         return self.encoder(x)
