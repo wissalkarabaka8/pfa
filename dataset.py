@@ -8,8 +8,6 @@ class MyDataset(Dataset):
     def __init__(self, root_dir, transform=None):
         self.root_dir = root_dir
         self.transform = transform
-        
-        # liste des images
         self.image_paths = []
         
         for file in os.listdir(root_dir):

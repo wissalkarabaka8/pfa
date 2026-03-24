@@ -83,7 +83,7 @@ class BetaVAE_H(nn.Module):
 class BetaVAE_B(BetaVAE_H):
     """Model proposed in understanding beta-VAE paper(Burgess et al, arxiv:1804.03599, 2018)."""
 
-    def __init__(self, z_dim=10, nc=1):
+    def __init__(self, z_dim=10, nc=3):
         super(BetaVAE_B, self).__init__()
         self.nc = nc
         self.z_dim = z_dim
@@ -147,24 +147,13 @@ class BetaVAE_B(BetaVAE_H):
 
 def kaiming_init(m):
     if isinstance(m, (nn.Linear, nn.Conv2d)):
-        init.kaiming_normal(m.weight)
+        init.kaiming_normal_(m.weight)
         if m.bias is not None:
             m.bias.data.fill_(0)
     elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
         m.weight.data.fill_(1)
         if m.bias is not None:
             m.bias.data.fill_(0)
-
-
-def normal_init(m, mean, std):
-    if isinstance(m, (nn.Linear, nn.Conv2d)):
-        m.weight.data.normal_(mean, std)
-        if m.bias.data is not None:
-            m.bias.data.zero_()
-    elif isinstance(m, (nn.BatchNorm2d, nn.BatchNorm1d)):
-        m.weight.data.fill_(1)
-        if m.bias.data is not None:
-            m.bias.data.zero_()
 
 
 if __name__ == '__main__':
