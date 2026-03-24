@@ -28,19 +28,29 @@ class BetaVAE_H(nn.Module):
         self.z_dim = z_dim
         self.nc = nc
         self.encoder = nn.Sequential(
-            nn.Conv2d(nc, 32, 4, 2, 1),          # B,  32, 32, 32
+            nn.Conv2d(nc, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 32, 4, 2, 1),          # B,  32, 16, 16
+
+            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 64, 4, 2, 1),          # B,  64,  8,  8
+
+            nn.Conv2d(32, 64, 4, 2, 1),
+            nn.BatchNorm2d(64),
             nn.ReLU(True),
-            nn.Conv2d(64, 64, 4, 2, 1),          # B,  64,  4,  4
+
+            nn.Conv2d(64, 64, 4, 2, 1),
+            nn.BatchNorm2d(64),
             nn.ReLU(True),
-            nn.Conv2d(64, 256, 4, 1),            # B, 256,  1,  1
+
+            nn.Conv2d(64, 256, 4, 1),
+            nn.BatchNorm2d(256),
             nn.ReLU(True),
-            View((-1, 256*1*1)),                 # B, 256
-            nn.Linear(256, z_dim*2),             # B, z_dim*2
-        )
+
+            View((-1, 256)),
+            nn.Linear(256, z_dim*2),
+    )
         self.decoder = nn.Sequential(
             nn.Linear(z_dim, 256),               # B, 256
             View((-1, 256, 1, 1)),               # B, 256,  1,  1
@@ -89,20 +99,33 @@ class BetaVAE_B(BetaVAE_H):
         self.z_dim = z_dim
 
         self.encoder = nn.Sequential(
-            nn.Conv2d(nc, 32, 4, 2, 1),          # B,  32, 32, 32
+            nn.Conv2d(nc, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 32, 4, 2, 1),          # B,  32, 16, 16
+
+            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 32, 4, 2, 1),          # B,  32,  8,  8
+
+            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            nn.Conv2d(32, 32, 4, 2, 1),          # B,  32,  4,  4
+
+            nn.Conv2d(32, 32, 4, 2, 1),
+            nn.BatchNorm2d(32),
             nn.ReLU(True),
-            View((-1, 32*4*4)),                  # B, 512
-            nn.Linear(32*4*4, 256),              # B, 256
+
+            View((-1, 32*4*4)),
+
+            nn.Linear(32*4*4, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(True),
-            nn.Linear(256, 256),                 # B, 256
+
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(True),
-            nn.Linear(256, z_dim*2),             # B, z_dim*2
+
+            nn.Linear(256, z_dim*2),
         )
 
         self.decoder = nn.Sequential(
