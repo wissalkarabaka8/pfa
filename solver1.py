@@ -18,7 +18,7 @@ def reconstruction_loss(x, x_recon, distribution='gaussian'):
     if distribution == 'gaussian':
         return F.mse_loss(x_recon, x, reduction='sum') / batch_size
     else:
-        return None
+        return F.l1_loss(x_recon, x, reduction='sum') / batch_size
 
 
 def kl_divergence(mu, logvar):
