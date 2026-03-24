@@ -44,7 +44,7 @@ def return_data(folder_path, batch_size=32, num_workers=1, image_size=64):
     return loader
 
 if __name__ == '__main__':
-    folder_path = r'C:\Users\Ghada\Desktop\code pfa\test' # Remplace par le chemin de ton dossier d'images
+    folder_path = r'folder_path' # Remplace par le chemin de ton dossier d'images
 
     # Crée le DataLoader avec ta fonction return_data
     loader = return_data(folder_path, batch_size=32, num_workers=1, image_size=64)
