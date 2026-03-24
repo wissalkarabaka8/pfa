@@ -517,4 +517,3 @@ class Solver(object):
         print("\n" + "="*80 + "\n")
         
         return rapport_lea
-
