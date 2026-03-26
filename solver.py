@@ -102,10 +102,6 @@ class Solver:
         - 'beta sparsity':   recon + beta * total_kld  (beta-VAE)
         - 'L1 sparsity':     recon + lambda * L1(dim_kld)
         - 'both sparsity':   recon + beta * total_kld + lambda * L1(dim_kld)
-
-        NOTE: 'beta sparsity' uses total_kld (scalar) rather than dim_kld.sum()
-        to avoid double-counting: total_kld is already the mean over the batch
-        of the sum over dimensions.
         """
         if self.methode == "basic":
             return recon + total_kld
@@ -139,7 +135,7 @@ class Solver:
 
                 # Forward pass
                 x_recon_H, mu_H, logvar_H, _ = self.net_H(x)
-                x_recon_B, mu_B, logvar_B = self.net_B(x)
+                x_recon_B, mu_B, logvar_B, _ = self.net_B(x)  # ✅ CORRECTION : 4 valeurs
 
                 # Loss computation
                 recon_H = reconstruction_loss(x, x_recon_H, self.decoder_dist)
@@ -248,7 +244,6 @@ class Solver:
             )
             print(f"[Checkpoint Loaded] {path_H} | {path_B}")
 
-    # ✅ CORRECTION 1 : bien indentée dans la classe (4 espaces)
     def analyze_latent_training(self, interval=1000):
         """
         Analyse the latent space on training data.
@@ -279,7 +274,7 @@ class Solver:
         all_logvar = np.concatenate(all_logvar, axis=0)
         all_z      = np.concatenate(all_z,      axis=0)
 
-        # ✅ CORRECTION 2 : _save définie comme closure (accès à self via capture)
+        # _save définie comme closure (accès à self.output_dir via capture)
         def _save(fname):
             p = os.path.join(self.output_dir, fname)
             plt.tight_layout()
@@ -302,7 +297,7 @@ class Solver:
         np.fill_diagonal(corr, 0)
         mean_correlation = float(np.mean(np.abs(corr)))
 
-        # 4. ✅ CORRECTION 3 : Entropie gaussienne correcte (depuis logvar)
+        # 4. Entropie gaussienne correcte (depuis logvar)
         entropy_per_dim = 0.5 * np.mean(1 + all_logvar, axis=0)
 
         # 5. Sparsity
@@ -325,7 +320,7 @@ class Solver:
         else:
             print("→ Risk of posterior collapse ⚠️")
 
-        # Plots (tous à l'intérieur de la méthode ✅)
+        # Plots
         fig, ax = plt.subplots(figsize=(10, 5))
         ax.hist(all_z.flatten(), bins=100)
         ax.set_title("Distribution of Latent z")
@@ -363,7 +358,7 @@ class Solver:
         ax.bar(range(len(sparsity_per_dim)), sparsity_per_dim)
         ax.set_title("Sparsity per Dimension"); ax.grid(True)
         _save('latent_sparsity.png')
-        #
+
         fig, ax = plt.subplots(figsize=(10, 5))
         dimension_counts = np.sum(np.abs(all_z) > 0.01, axis=0)
         ax.bar(range(len(dimension_counts)), dimension_counts, color='blue')
@@ -371,7 +366,6 @@ class Solver:
         ax.set_xlabel("Latent Dimension"); ax.set_ylabel("Count over dataset"); ax.grid(True)
         _save('latent_dimension_frequency.png')
 
-        # ✅ CORRECTION 4 : return à l'intérieur de la méthode
         return {
             'dimension_variance': dim_variance,
             'active_dims_mask':   active_dims,
@@ -386,7 +380,6 @@ class Solver:
             'batch_active_dims':  batch_active_dims,
         }
 
-    # ✅ CORRECTION 5 : compare_models bien dans la classe + try/finally
     def compare_models(self):
         """Version sûre : swap net_H/net_B avec try/finally pour garantir la restauration."""
         print("\n========== MODEL COMPARISON ==========\n")
@@ -400,11 +393,10 @@ class Solver:
             self.net_H = self.net_B
             results_B = self.analyze_latent_training()
         finally:
-            self.net_H = original_net_H  # ✅ toujours restauré, même si exception
+            self.net_H = original_net_H  # toujours restauré, même si exception
 
         return {"H": results_H, "B": results_B}
 
-    # ✅ CORRECTION 6 : print_comparison avec self (méthode de classe)
     def print_comparison(self, results):
         print("\n===== FINAL COMPARISON =====\n")
         for model in ["H", "B"]:
@@ -415,7 +407,6 @@ class Solver:
             print(f"  Efficiency      : {r['efficiency_score']:.4f}")
             print(f"  Mean correlation: {r['mean_correlation']:.4f}\n")
 
-    # ✅ CORRECTION 7 : select_best_model avec self (méthode de classe)
     def select_best_model(self, results):
         best = max(results, key=lambda m: results[m]['efficiency_score'])
         print(f"\n🏆 BEST MODEL: {best}")
