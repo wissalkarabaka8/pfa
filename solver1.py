@@ -29,9 +29,9 @@ def kl_divergence(mu, logvar):
         logvar = logvar.view(logvar.size(0), logvar.size(1))
  
     klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-    total_kld = klds.sum(1).mean(0, True)
-    dimension_wise_kld = klds.mean(0)
-    mean_kld = klds.mean(1).mean(0, True)
+    total_kld = klds.sum(1).mean(0, True) #c'est la vraie KL globale (somme de KL sur totes les dim)
+    dimension_wise_kld = klds.mean(0)#KL moyenne par batch pour chaque dim
+    mean_kld = klds.mean(1).mean(0, True)#KL moyenne par dim
     return total_kld, dimension_wise_kld, mean_kld
  
  
@@ -204,14 +204,14 @@ class Solver:
                 recon_dims = list(range(1, x.dim()))
                 recon_error = F.mse_loss(x_recon, x, reduction='none').mean(dim=recon_dims)
                 scores.append(recon_error.cpu().numpy())
-        return np.concatenate(scores)
+        return np.concatenate(scores) # score d'anomalie de tous les images du loader
  
     def compute_threshold(self, train_loader=None):
         if train_loader is None:
             train_loader = self.data_loader
         self.net_mode(False)
         scores = self._recon_scores(self.net_H, train_loader)
-        threshold = np.mean(scores) + 3 * np.std(scores)
+        threshold = np.mean(scores) + 3 * np.std(scores) #rule name :Three-sigma rule
         print(f"[Threshold] Computed threshold: {threshold:.4f}")
         return threshold
  
@@ -273,96 +273,96 @@ class Solver:
         Plots are saved (server-safe).
         """
 
-    self.net_mode(False)
+        self.net_mode(False)
 
-    all_mu = []
-    all_logvar = []
-    all_z = []
-    batch_active_dims = []
+        all_mu = []
+        all_logvar = []
+        all_z = []
+        batch_active_dims = []
 
-    print("[LEA] Running latent analysis on training data...")
+        print("[LEA] Running latent analysis on training data...")
 
-    with torch.no_grad():
-        for x in self.data_loader:
-            x = cuda(x, self.use_cuda)
+        with torch.no_grad():
+            for x in self.data_loader:
+                x = cuda(x, self.use_cuda)
 
-            _, mu_H, logvar_H, _ = self.net_H(x)
+                _, mu_H, logvar_H, _ = self.net_H(x)
 
-            all_mu.append(mu_H.cpu().numpy())
-            all_logvar.append(logvar_H.cpu().numpy())
+                all_mu.append(mu_H.cpu().numpy())
+                all_logvar.append(logvar_H.cpu().numpy())
 
-            # Sample z
-            z = mu_H + torch.exp(logvar_H / 2) * torch.randn_like(mu_H)
-            all_z.append(z.cpu().numpy())
+                # Sample z
+                z = mu_H + torch.exp(logvar_H / 2) * torch.randn_like(mu_H)
+                all_z.append(z.cpu().numpy())
 
-            # ✅ Batch active dims (stability)
-            var_batch = torch.var(mu_H, dim=0, unbiased=False)
-            active_batch = (var_batch > 0.01).float()
-            batch_active_dims.append(active_batch.sum().item())
+                # ✅ Batch active dims (stability)
+                var_batch = torch.var(mu_H, dim=0, unbiased=False)
+                active_batch = (var_batch > 0.01).float()
+                batch_active_dims.append(active_batch.sum().item())
 
-    # Convert
-    all_mu = np.concatenate(all_mu, axis=0)
-    all_logvar = np.concatenate(all_logvar, axis=0)
-    all_z = np.concatenate(all_z, axis=0)
+        # Convert
+        all_mu = np.concatenate(all_mu, axis=0)
+        all_logvar = np.concatenate(all_logvar, axis=0)
+        all_z = np.concatenate(all_z, axis=0)
 
-    # ----------------------------------------------------------
-    # 1. Variance
-    # ----------------------------------------------------------
-    dim_variance = np.var(all_mu, axis=0)
-    total_variance = float(np.sum(dim_variance))
+        # ----------------------------------------------------------
+        # 1. Variance
+        # ----------------------------------------------------------
+        dim_variance = np.var(all_mu, axis=0)
+        total_variance = float(np.sum(dim_variance))
 
-    # ----------------------------------------------------------
-    # 2. Active dimensions (CORRECTED ✅)
-    # ----------------------------------------------------------
-    active_threshold = 0.01
-    active_dims = dim_variance > active_threshold   # ✅ FIXED
-    num_active_dims = int(np.sum(active_dims))
-    active_ratio = num_active_dims / self.z_dim
+        # ----------------------------------------------------------
+        # 2. Active dimensions (CORRECTED ✅)
+        # ----------------------------------------------------------
+        active_threshold = 0.01
+        active_dims = dim_variance > active_threshold   # ✅ FIXED
+        num_active_dims = int(np.sum(active_dims))
+        active_ratio = num_active_dims / self.z_dim
 
-    # ----------------------------------------------------------
-    # 3. Correlation (robust)
-    # ----------------------------------------------------------
-    correlation_matrix = np.corrcoef(all_z.T)
-    correlation_matrix = np.nan_to_num(correlation_matrix)  # ✅ FIX
-    np.fill_diagonal(correlation_matrix, 0)
+        # ----------------------------------------------------------
+        # 3. Correlation (robust)
+        # ----------------------------------------------------------
+        correlation_matrix = np.corrcoef(all_z.T)
+        correlation_matrix = np.nan_to_num(correlation_matrix)  # ✅ FIX
+        np.fill_diagonal(correlation_matrix, 0)
 
-    mean_correlation = float(np.mean(np.abs(correlation_matrix)))
+        mean_correlation = float(np.mean(np.abs(correlation_matrix)))
 
-    # ----------------------------------------------------------
-    # 4. Entropy-like measure (not true entropy)
-    # ----------------------------------------------------------
-    entropy_per_dim = -np.mean(all_mu * np.log(np.abs(all_mu) + 1e-8), axis=0)
+        # ----------------------------------------------------------
+        # 4. Entropy-like measure (not true entropy)
+        # ----------------------------------------------------------
+        entropy_per_dim = -np.mean(all_mu * np.log(np.abs(all_mu) + 1e-8), axis=0)
 
-    # ----------------------------------------------------------
-    # 5. Sparsity
-    # ----------------------------------------------------------
-    sparsity_per_dim = np.mean(np.abs(all_mu) < 0.1, axis=0)
+        # ----------------------------------------------------------
+        # 5. Sparsity
+        # ----------------------------------------------------------
+        sparsity_per_dim = np.mean(np.abs(all_mu) < 0.1, axis=0)
 
-    # ----------------------------------------------------------
-    # 6. Efficiency
-    # ----------------------------------------------------------
-    efficiency_score = active_ratio * (1 - mean_correlation)
+        # ----------------------------------------------------------
+        # 6. Efficiency
+        # ----------------------------------------------------------
+        efficiency_score = active_ratio * (1 - mean_correlation)
 
-    # ----------------------------------------------------------
-    # PRINT RESULTS
-    # ----------------------------------------------------------
-    print(f"\n[LEA] Active dims   : {num_active_dims}/{self.z_dim}")
-    print(f"[LEA] Active ratio  : {active_ratio:.4f}")
-    print(f"[LEA] Efficiency    : {efficiency_score:.4f}")
-    print(f"[LEA] Mean corr     : {mean_correlation:.4f}")
-    print(f"[LEA] Total variance: {total_variance:.4f}")
+        # ----------------------------------------------------------
+        # PRINT RESULTS
+        # ----------------------------------------------------------
+        print(f"\n[LEA] Active dims   : {num_active_dims}/{self.z_dim}")
+        print(f"[LEA] Active ratio  : {active_ratio:.4f}")
+        print(f"[LEA] Efficiency    : {efficiency_score:.4f}")
+        print(f"[LEA] Mean corr     : {mean_correlation:.4f}")
+        print(f"[LEA] Total variance: {total_variance:.4f}")
 
-    if active_ratio > 0.9:
-        print("→ No sparsity — all dimensions are used")
-    elif active_ratio > 0.3:
-        print("→ Moderate sparsity")
-    else:
-        print("→ Risk of posterior collapse ⚠️")
+        if active_ratio > 0.9:
+            print("→ No sparsity — all dimensions are used")
+        elif active_ratio > 0.3:
+            print("→ Moderate sparsity")
+        else:
+            print("→ Risk of posterior collapse ⚠️")
 
     # ----------------------------------------------------------
     # SAVE PLOTS
     # ----------------------------------------------------------
-    def _save(fname):
+    def _save(fname):#fname:nom de fichier donnefr a la figure
         p = os.path.join(self.output_dir, fname)
         plt.tight_layout()
         plt.savefig(p, dpi=300)
