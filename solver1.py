@@ -423,6 +423,22 @@ class Solver:
     ax.set_title("Sparsity per Dimension")
     ax.grid(True)
     _save('latent_sparsity.png')
+    # ----------------------------------------------------------
+    # 7. Frequency of active values per latent dimension
+    # ----------------------------------------------------------
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Se servir de all_z existant
+    threshold_active = 0.01  # seuil pour considérer qu'une dimension est "active"
+    dimension_counts = np.sum(np.abs(all_z) > threshold_active, axis=0)  # compter pour chaque dim
+
+    ax.bar(range(len(dimension_counts)), dimension_counts, color='blue')
+    ax.set_title("Frequency of Active Values per Latent Dimension")
+    ax.set_xlabel("Latent Dimension")
+    ax.set_ylabel("Count over dataset")
+    ax.grid(True)
+
+    _save('latent_dimension_frequency.png')
 
     # ----------------------------------------------------------
     # RETURN
