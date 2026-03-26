@@ -32,25 +32,13 @@ class MyDataset(Dataset):
         sample = Image.open(self.image_paths[random.randint(0, len(self.image_paths)-1)]).convert("RGB")
         print("size of a random image :", sample.size)
 
-def return_data(folder_path, batch_size=32, num_workers=1, image_size=64):
+def return_data(folder_path, batch_size=32, num_workers=0, image_size=64, shuffle=True):  # ✅ ajouter shuffle
     transform = transforms.Compose([
         transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
     ])
     
     dataset = MyDataset(folder_path, transform=transform)
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=True,
+    loader = DataLoader(dataset, batch_size=batch_size, shuffle=shuffle,  # ✅ utiliser le paramètre
                         num_workers=num_workers, pin_memory=True, drop_last=False)
     return loader
-
-if __name__ == '__main__':
-    folder_path = r'folder_path' # Remplace par le chemin de ton dossier d'images
-
-    # Crée le DataLoader avec ta fonction return_data
-    loader = return_data(folder_path, batch_size=32, num_workers=1, image_size=64)
-
-    # Récupère le premier batch d'images
-    images = next(iter(loader))
-    
-    # Vérifie les images
-    print("Shape du batch:", images.shape)
