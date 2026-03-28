@@ -1,148 +1,203 @@
 import argparse
-import numpy as np
+import os
 import torch
-from solver import Solver
+import numpy as np
+from PIL import Image
+from torchvision import transforms
 
 
 def parse_args():
-    """Parse et retourne les arguments en ligne de commande"""
-    parser = argparse.ArgumentParser(description='Beta-VAE for Anomaly Detection')
-    
-    # Paramètres de données
-    parser.add_argument('--train_dset_dir', type=str, required=True,
-                        help='Chemin vers le dossier contenant les images d\'entraînement (images réelles)')
-    parser.add_argument('--test_dset_dir', type=str, required=True,
-                        help='Chemin vers le dossier contenant les images de test (mélange normal + anomalies)')
-    parser.add_argument('--dset_dir', type=str, default='data',
-                        help='Répertoire parent des données')
-    parser.add_argument('--dataset', type=str, default='anomaly_detection',
-                        help='Nom du dataset')
-    parser.add_argument('--batch_size', type=int, default=32,
-                        help='Taille du batch')
-    parser.add_argument('--image_size', type=int, default=64,
-                        help='Taille des images après redimensionnement')
-    parser.add_argument('--num_workers', type=int, default=1,
-                        help='Nombre de workers pour le chargement des données')
-    
-    # Paramètres du modèle
-    parser.add_argument('--model', type=str, default='H', choices=['H', 'B'],
-                        help='Architecture du modèle: H pour BetaVAE_H, B pour BetaVAE_B')
-    parser.add_argument('--z_dim', type=int, default=10,
-                        help='Dimension de l\'espace latent')
-    
-    # Paramètres d'entraînement
-    parser.add_argument('--max_iter', type=int, default=1000000,
-                        help='Nombre maximum d\'itérations d\'entraînement')
-    parser.add_argument('--lr', type=float, default=1e-4,
-                        help='Learning rate')
-    parser.add_argument('--beta1', type=float, default=0.9,
-                        help='Coefficient beta1 pour Adam optimizer')
-    parser.add_argument('--beta2', type=float, default=0.999,
-                        help='Coefficient beta2 pour Adam optimizer')
-    
-    # Paramètres spécifiques au VAE
-    parser.add_argument('--objective', type=str, default='H', choices=['H', 'B'],
-                        help='Objectif d\'entraînement: H pour Beta-VAE classique, B pour Factor-VAE')
-    parser.add_argument('--beta', type=float, default=4.0,
-                        help='Coefficient beta pour la régularisation KL (objectif H)')
-    parser.add_argument('--gamma', type=float, default=100.0,
-                        help='Coefficient gamma pour la contrainte C (objectif B)')
-    parser.add_argument('--C_max', type=float, default=25.0,
-                        help='Valeur maximale de C pour Factor-VAE')
-    parser.add_argument('--C_stop_iter', type=int, default=100000,
-                        help='Nombre d\'itérations pour atteindre C_max')
-    
-    # Sparsité
-    parser.add_argument('--methode', type=str, default='beta sparsity', 
-                        choices=['beta sparsity', 'L1 sparsity', 'both sparsity'],
-                        help='Méthode de sparsité pour les dimensions latentes')
-    parser.add_argument('--lambda_sparsity', type=float, default=0.1,
-                        help='Coefficient de sparsité L1')
-   
-    
-    # Checkpoints et sauvegarde
-    parser.add_argument('--ckpt_dir', type=str, default='checkpoints',
-                        help='Répertoire pour sauvegarder les checkpoints')
-    parser.add_argument('--ckpt_name', type=str, default=None,
-                        help='Nom du checkpoint à charger pour reprendre l\'entraînement')
-    parser.add_argument('--output_dir', type=str, default='outputs',
-                        help='Répertoire pour sauvegarder les résultats')
-    parser.add_argument('--viz_name', type=str, default='exp1',
-                        help='Nom de l\'expérience')
-    parser.add_argument('--save_output', type=bool, default=True,
-                        help='Sauvegarder les résultats')
-    
-    # Fréquences de sauvegarde et affichage
-    parser.add_argument('--gather_step', type=int, default=100,
-                        help='Fréquence de collecte des données de suivi (en itérations)')
-    parser.add_argument('--display_step', type=int, default=100,
-                        help='Fréquence d\'affichage des logs (en itérations)')
-    parser.add_argument('--save_step', type=int, default=10000,
-                        help='Fréquence de sauvegarde des checkpoints (en itérations)')
-    
-    # GPU
-    parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available(),
-                        help='Utiliser GPU si disponible')
-    
-    # Anomaly Detection
-    parser.add_argument('--anomaly_threshold_percentile', type=float, default=95.0,
-                        help='Percentile pour calculer le seuil d\'anomalie')
-    
+    parser = argparse.ArgumentParser(description='Beta-VAE — Détection anomalie (REAL / FAKE)')
+
+    # ── Mode ──────────────────────────────────────────────────────────────
+    parser.add_argument('--mode', type=str, required=True,
+                        choices=['train', 'test', 'predict', 'analyze', 'compare'],
+                        help='train   : entraîner le modèle\n'
+                             'test    : évaluer le dossier test (REAL/FAKE)\n'
+                             'predict : prédire une seule image\n'
+                             'analyze : analyser l\'espace latent\n'
+                             'compare : comparer net_H vs net_B')
+
+    # ── Image unique (mode predict) ───────────────────────────────────────
+    parser.add_argument('--image', type=str, default=None,
+                        help='Chemin vers l\'image à prédire (mode predict uniquement)')
+
+    # ── Données ───────────────────────────────────────────────────────────
+    parser.add_argument('--train_dset_dir', type=str, default='./data/train',
+                        help='Dossier des images d\'entraînement')
+    parser.add_argument('--test_dset_dir', type=str, default='./data/test',
+                        help='Dossier des images de test')
+    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--image_size', type=int, default=64)
+    parser.add_argument('--num_workers', type=int, default=0)  # 0 obligatoire sur Windows
+
+    # ── Modèle ────────────────────────────────────────────────────────────
+    parser.add_argument('--z_dim',           type=int,   default=16)
+    parser.add_argument('--beta',            type=float, default=4.0)
+    parser.add_argument('--gamma',           type=float, default=1.0)
+    parser.add_argument('--C_max',           type=float, default=25.0)
+    parser.add_argument('--C_stop_iter',     type=float, default=1e5)
+    parser.add_argument('--objective',       type=str,   default='H', choices=['H', 'B'])
+    parser.add_argument('--methode',         type=str,   default='beta sparsity',
+                        choices=['basic', 'beta sparsity', 'L1 sparsity', 'both sparsity'])
+    parser.add_argument('--lambda_sparsity', type=float, default=0.01)
+
+    # ── Optimiseur ────────────────────────────────────────────────────────
+    parser.add_argument('--lr',    type=float, default=1e-4)
+    parser.add_argument('--beta1', type=float, default=0.9)
+    parser.add_argument('--beta2', type=float, default=0.999)
+
+    # ── Entraînement ──────────────────────────────────────────────────────
+    parser.add_argument('--max_iter',     type=int, default=10000)
+    parser.add_argument('--gather_step',  type=int, default=500)
+    parser.add_argument('--display_step', type=int, default=500)
+    parser.add_argument('--save_step',    type=int, default=1000)
+
+    # ── Répertoires ───────────────────────────────────────────────────────
+    parser.add_argument('--ckpt_dir',    type=str,  default='./checkpoints')
+    parser.add_argument('--output_dir',  type=str,  default='./outputs')
+    parser.add_argument('--viz_name',    type=str,  default='experiment')
+    parser.add_argument('--ckpt_name',   type=str,  default='final')
+    parser.add_argument('--save_output', type=bool, default=True)
+
+    # ── Matériel ──────────────────────────────────────────────────────────
+    parser.add_argument('--cuda', type=bool, default=torch.cuda.is_available())
+
     return parser.parse_args()
 
 
+def load_single_image(image_path):
+    """Charge une image et la prépare pour le modèle → shape (1, 3, 64, 64)."""
+    transform = transforms.Compose([
+        transforms.Resize((64, 64)),
+        transforms.ToTensor(),
+    ])
+    img = Image.open(image_path).convert("RGB")
+    return transform(img).unsqueeze(0)
+
+
 def main():
-    """Fonction principale"""
     args = parse_args()
-    
-    print("="*60)
-    print("Beta-VAE pour Anomaly Detection")
-    print("="*60)
-    print(f"Train dataset: {args.train_dset_dir}")
-    print(f"Test dataset: {args.test_dset_dir}")
-    print(f"Batch size: {args.batch_size}")
-    print(f"Model: {args.model}")
-    print(f"Z dimension: {args.z_dim}")
-    print(f"Objective: {args.objective}")
-    print(f"Sparsity method: {args.methode}")
-    print("="*60)
-    
-    # Créer le solver
-    solver = Solver(args)
-    
-    # ===== ENTRAÎNEMENT =====
-    print("\n[INFO] Démarrage de l'entraînement...")
-    solver.train()
-    
-    # ===== TEST / ANOMALY DETECTION =====
-    print("\n[INFO] Évaluation sur données de test...")
-    test_scores = solver.test(solver.test_loader)
-    
-    # Calculer le seuil d'anomalie
-    threshold = np.percentile(test_scores, args.anomaly_threshold_percentile)
-    print(f"[INFO] Seuil d'anomalie calculé (percentile {args.anomaly_threshold_percentile}): {threshold:.4f}")
-    
-    # Détecter les anomalies
-    print("\n[INFO] Détection des anomalies...")
-    predictions = solver.detect_anomalies(test_scores, threshold)
-    
-    # ===== LATENT EFFICIENCY ANALYSIS (LEA) =====
-    print("\n[INFO] Analyse de l'efficacité de l'espace latent (LEA)...")
-    rapport_lea = solver.analyze_latent_efficiency(solver.test_loader)
-    solver.print_latent_efficiency_report(rapport_lea)
-    
-    # ===== RÉSUMÉ FINAL =====
+    from solver import Solver
+
     print("\n" + "="*60)
-    print("RÉSUMÉ DE L'EXPÉRIENCE")
+    print(f"   MODE : {args.mode.upper()}")
     print("="*60)
-    print(f"Nombre total d'images testées: {len(test_scores)}")
-    print(f"Anomalies détectées: {predictions.sum()} ({100*predictions.sum()/len(predictions):.1f}%)")
-    print(f"Seuil d'anomalie utilisé: {threshold:.4f}")
-    print(f"Score d'efficacité latente: {rapport_lea['efficiency_score']:.4f}")
-    print(f"Dimensions actives: {rapport_lea['active_dimensions']}/{rapport_lea['total_dimensions']}")
+    print(f"  Train dir  : {args.train_dset_dir}")
+    print(f"  Test dir   : {args.test_dset_dir}")
+    print(f"  z_dim      : {args.z_dim}")
+    print(f"  Methode    : {args.methode}")
+    print(f"  CUDA       : {args.cuda}")
     print("="*60 + "\n")
-    
-    print("[✓] Pipeline complète terminée avec succès!")
+
+    solver = Solver(args)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # MODE TRAIN
+    # ─────────────────────────────────────────────────────────────────────
+    if args.mode == 'train':
+        print("[INFO] Démarrage de l'entraînement...")
+        solver.train()
+        # → train() calcule self.threshold automatiquement
+
+        # Sauvegarder le modèle et le threshold
+        solver.save_checkpoint(args.ckpt_name)
+        solver.save_threshold()
+
+        print("\n" + "="*60)
+        print("  ✅ Entraînement terminé")
+        print(f"  ✅ Checkpoint : {args.ckpt_name}")
+        print(f"  ✅ Threshold  : {solver.threshold:.4f}")
+        print("="*60)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # MODE TEST  (dossier entier → REAL / FAKE pour chaque image)
+    # ─────────────────────────────────────────────────────────────────────
+    elif args.mode == 'test':
+        print("[INFO] Chargement du modèle...")
+        solver.load_checkpoint(args.ckpt_name)
+        solver.load_threshold()
+
+        print("[INFO] Évaluation sur le dossier test...")
+        results = solver.test()
+
+        # Résumé
+        nb_fake_H = sum(1 for r in results if r['label_H'] == 'FAKE')
+        nb_real_H = sum(1 for r in results if r['label_H'] == 'REAL')
+        nb_fake_B = sum(1 for r in results if r['label_B'] == 'FAKE')
+        nb_real_B = sum(1 for r in results if r['label_B'] == 'REAL')
+
+        print("\n" + "="*60)
+        print("  RÉSUMÉ FINAL")
+        print("="*60)
+        print(f"  Threshold utilisé : {solver.threshold:.4f}")
+        print(f"  net_H → REAL: {nb_real_H}  |  FAKE: {nb_fake_H}")
+        print(f"  net_B → REAL: {nb_real_B}  |  FAKE: {nb_fake_B}")
+        print("="*60)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # MODE PREDICT  (une seule image → REAL / FAKE)
+    # ─────────────────────────────────────────────────────────────────────
+    elif args.mode == 'predict':
+        if args.image is None:
+            raise ValueError("❌ --image requis en mode predict\n"
+                             "   Ex: python main.py --mode predict --image photo.jpg")
+        if not os.path.exists(args.image):
+            raise FileNotFoundError(f"❌ Image introuvable : {args.image}")
+
+        print("[INFO] Chargement du modèle...")
+        solver.load_checkpoint(args.ckpt_name)
+        solver.load_threshold()
+
+        print(f"[INFO] Image : {args.image}")
+        img_tensor = load_single_image(args.image)
+
+        result = solver.predict_single(img_tensor)
+
+        print("\n" + "="*60)
+        print("  RÉSULTAT")
+        print("="*60)
+        print(f"  net_H → {result['label_H']}  (score: {result['score_H']:.4f})")
+        print(f"  net_B → {result['label_B']}  (score: {result['score_B']:.4f})")
+        print(f"  Threshold : {solver.threshold:.4f}")
+        print("="*60)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # MODE ANALYZE  (analyse de l'espace latent + graphes)
+    # ─────────────────────────────────────────────────────────────────────
+    elif args.mode == 'analyze':
+        print("[INFO] Chargement du modèle...")
+        solver.load_checkpoint(args.ckpt_name)
+
+        print("[INFO] Analyse de l'espace latent...")
+        results = solver.analyze_latent_training()
+
+        print("\n" + "="*60)
+        print("  RÉSULTATS ANALYSE LATENTE")
+        print("="*60)
+        print(f"  Active dims     : {results['num_active_dims']}/{args.z_dim}")
+        print(f"  Active ratio    : {results['active_ratio']:.4f}")
+        print(f"  Efficiency      : {results['efficiency_score']:.4f}")
+        print(f"  Mean corr       : {results['mean_correlation']:.4f}")
+        print(f"  Total variance  : {results['total_variance']:.4f}")
+        print(f"  Graphes sauvés dans : {args.output_dir}/{args.viz_name}/")
+        print("="*60)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # MODE COMPARE  (compare net_H vs net_B)
+    # ─────────────────────────────────────────────────────────────────────
+    elif args.mode == 'compare':
+        print("[INFO] Chargement du modèle...")
+        solver.load_checkpoint(args.ckpt_name)
+
+        print("[INFO] Comparaison net_H vs net_B...")
+        comparison = solver.compare_models()
+        solver.print_comparison(comparison)
+        best = solver.select_best_model(comparison)
+
+        print("\n" + "="*60)
+        print(f"  🏆 MEILLEUR MODÈLE : {best}")
+        print("="*60)
 
 
 if __name__ == '__main__':
