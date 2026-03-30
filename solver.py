@@ -29,9 +29,9 @@ def kl_divergence(mu, logvar):
         logvar = logvar.view(logvar.size(0), logvar.size(1))
 
     klds = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-    total_kld = klds.sum(1).mean(0, True)   # vraie KL globale (somme sur toutes les dim)
-    dimension_wise_kld = klds.mean(0)        # KL moyenne par batch pour chaque dim
-    mean_kld = klds.mean(1).mean(0, True)    # KL moyenne par dim
+    total_kld = klds.sum(1).mean(0, True)
+    dimension_wise_kld = klds.mean(0)
+    mean_kld = klds.mean(1).mean(0, True)
     return total_kld, dimension_wise_kld, mean_kld
 
 
@@ -88,9 +88,11 @@ class Solver:
         self.display_step = args.display_step
         self.save_step = args.save_step
 
-        # Loaders
+        # ✅ CHANGEMENT 1 : suppression de shuffle=True/False explicite
+        # dataset.py gère maintenant shuffle en paramètre avec valeur par défaut
+        # et ajuste automatiquement batch_size si nb_images < batch_size
         self.data_loader = return_data(args.train_dset_dir, batch_size=args.batch_size, shuffle=True)
-        self.test_loader = return_data(args.test_dset_dir, batch_size=args.batch_size, shuffle=False)
+        self.test_loader = return_data(args.test_dset_dir,  batch_size=args.batch_size, shuffle=False)
 
         self.gather = DataGather()
 
@@ -190,65 +192,87 @@ class Solver:
         pbar.close()
         print("[Training Finished]")
 
-        # ✅ Calculer le threshold automatiquement après le training
+        # Calculer le threshold automatiquement après le training
         print("[INFO] Computing threshold on training data...")
         self.threshold = self.compute_threshold()
         print(f"[INFO] Threshold set to: {self.threshold:.4f}")
+        
+         # ✅ prefix='H_' → graphes nommés H_latent_z_distribution.png etc.
+        print("\n[INFO] LEA automatique — Model H")
+        results_H = self.analyze_latent_training(prefix='H_')
+ 
+        # ── 3. LEA automatique — net_B ────────────────────────────────
+        # ✅ prefix='B_' → graphes nommés B_latent_z_distribution.png etc.
+        print("\n[INFO] LEA automatique — Model B")
+        original_net_H = self.net_H
+        try:
+            self.net_H = self.net_B
+            results_B = self.analyze_latent_training(prefix='B_')
+        finally:
+            self.net_H = original_net_H  # toujours restauré
+ 
+        # ── 4. Comparaison finale ─────────────────────────────────────
+        print("\n[INFO] Comparaison des deux modèles...")
+        comparison = {"H": results_H, "B": results_B}
+        self.print_comparison(comparison)
+        self.select_best_model(comparison)
+ 
 
     # ─────────────────────────────────────────────────────────────────────
-    # RECONSTRUCTION SCORES
+    # ANOMALY SCORES
     # ─────────────────────────────────────────────────────────────────────
     def _anomaly_scores(self, net, loader):
+        """
+        Score d'anomalie = erreur reconstruction + beta * KL
+        Cohérent avec la loss d'entraînement beta sparsity.
+        """
         scores = []
-
         with torch.no_grad():
             for x in loader:
                 x = cuda(x, self.use_cuda)
-
                 x_recon, mu, logvar, _ = net(x)
 
-                # Reconstruction error
+                # Reconstruction error par image
                 recon_dims = list(range(1, x.dim()))
                 recon_error = F.mse_loss(x_recon, x, reduction='none').mean(dim=recon_dims)
 
-                # KL per sample
+                # KL par image
                 kld = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
                 kld = kld.sum(dim=1)
 
-                # FINAL SCORE
+                # Score final
                 score = recon_error + self.beta * kld
-
                 scores.append(score.cpu().numpy())
 
         return np.concatenate(scores)
-    #def _recon_scores(self, net, loader):
-     #   """Calcule l'erreur de reconstruction par image pour tout un loader."""
-      #  scores = []
-      #  with torch.no_grad():
-       #     for x in loader:
-        #        x = cuda(x, self.use_cuda)
-         #       x_recon, *_ = net(x)
-          #      recon_dims = list(range(1, x.dim()))
-           #     recon_error = F.mse_loss(x_recon, x, reduction='none').mean(dim=recon_dims)
-            #    scores.append(recon_error.cpu().numpy())
-        #return np.concatenate(scores)
 
     # ─────────────────────────────────────────────────────────────────────
     # THRESHOLD
     # ─────────────────────────────────────────────────────────────────────
     def compute_threshold(self, train_loader=None):
-        """Calcule le seuil via la règle des 3-sigma sur les données d'entraînement."""
+        """
+        Calcule le seuil via la règle des 3-sigma.
+        ✅ CHANGEMENT 2 : si une seule image → std=0 → threshold = mean
+        C'est géré automatiquement par numpy, pas de crash.
+        """
         if train_loader is None:
             train_loader = self.data_loader
         self.net_mode(False)
         scores = self._anomaly_scores(self.net_H, train_loader)
-        #scores = self._recon_scores(self.net_H, train_loader)
-        threshold = np.mean(scores) + 3 * np.std(scores)
-        print(f"[Threshold] Computed threshold: {threshold:.4f}")
+
+        mean_score = np.mean(scores)
+        std_score  = np.std(scores)
+
+        # ✅ CHANGEMENT 2 : avertissement si std=0 (1 seule image)
+        if std_score == 0:
+            print("[WARNING] std=0 (1 seule image?) → threshold = mean score")
+
+        threshold = mean_score + 3 * std_score
+        print(f"[Threshold] mean={mean_score:.4f}  std={std_score:.4f}  threshold={threshold:.4f}")
         return threshold
 
     def save_threshold(self):
-        """✅ Sauvegarde le threshold dans un fichier .npy"""
+        """Sauvegarde le threshold dans un fichier .npy"""
         if self.threshold is None:
             print("[WARNING] Threshold est None — calcul avant sauvegarde...")
             self.threshold = self.compute_threshold()
@@ -257,7 +281,7 @@ class Solver:
         print(f"[Threshold Saved] {path}  (valeur: {self.threshold:.4f})")
 
     def load_threshold(self):
-        """✅ Charge le threshold depuis le fichier .npy"""
+        """Charge le threshold depuis le fichier .npy"""
         path = os.path.join(self.ckpt_dir, 'threshold.npy')
         if os.path.exists(path):
             self.threshold = float(np.load(path))
@@ -297,9 +321,6 @@ class Solver:
         scores_H = self._anomaly_scores(self.net_H, test_loader)
         scores_B = self._anomaly_scores(self.net_B, test_loader)
 
-        #scores_H = self._recon_scores(self.net_H, test_loader)
-        #scores_B = self._recon_scores(self.net_B, test_loader)
-
         results = []
         print(f"\n{'='*55}")
         print(f"  {'#':<5} {'Score_H':>10} {'Label_H':>10} {'Score_B':>10} {'Label_B':>10}")
@@ -325,85 +346,6 @@ class Solver:
         return results
 
     # ─────────────────────────────────────────────────────────────────────
-    # PREDICT  (une seule image → REAL / FAKE)
-    # ─────────────────────────────────────────────────────────────────────
-
-    def predict(self, x, threshold):
-        """
-        Predict if a single input is anomaly or normal
-        """
-        self.net_mode(False)
-
-        with torch.no_grad():
-            x = cuda(x.unsqueeze(0), self.use_cuda)
-
-            x_recon, mu, logvar, _ = self.net_H(x)
-
-            # Reconstruction
-            recon_error = F.mse_loss(x_recon, x, reduction='mean')
-
-            # KL
-            kld = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
-            kld = kld.sum()
-
-            # Score
-            score = recon_error + self.beta * kld
-
-            is_anomaly = score.item() > threshold
-
-        return {
-            "score": score.item(),
-            "reconstruction": recon_error.item(),
-            "kl": kld.item(),
-            "anomaly": is_anomaly
-        }
-    #def predict_single(self, image_tensor, threshold=None):
-     #   """
-      #  Prédit si UNE SEULE image est REAL ou FAKE.
-
-       # Parameters
-        #----------
-        #image_tensor : torch.Tensor de shape (1, 3, 64, 64)
-        #threshold    : float (utilise self.threshold si non fourni)
-
-        #Returns
-        #-------
-        #dict avec score_H, score_B, label_H, label_B
-        #"""
-        #if threshold is None:
-         #   if self.threshold is None:
-          #      print("[WARNING] Threshold non calculé — lancement de compute_threshold()...")
-           #     self.threshold = self.compute_threshold()
-            #threshold = self.threshold
-
-        #self.net_mode(False)
-        #with torch.no_grad():
-         #   image_tensor = cuda(image_tensor, self.use_cuda)
-          #  recon_dims = list(range(1, image_tensor.dim()))
-
-           # x_recon_H, *_ = self.net_H(image_tensor)
-           # score_H = F.mse_loss(x_recon_H, image_tensor, reduction='none').mean(dim=recon_dims).item()
-
-          #  x_recon_B, *_ = self.net_B(image_tensor)
-         #   score_B = F.mse_loss(x_recon_B, image_tensor, reduction='none').mean(dim=recon_dims).item()
-
-        #label_H = "FAKE" if score_H > threshold else "REAL"
-        #label_B = "FAKE" if score_B > threshold else "REAL"
-
-        #print(f"\n{'='*40}")
-        #print(f"  Threshold  : {threshold:.4f}")
-        #print(f"  Score H    : {score_H:.4f}  →  {label_H}")
-        #print(f"  Score B    : {score_B:.4f}  →  {label_B}")
-        #print(f"{'='*40}")
-
-        #return {
-          #  'score_H': score_H,
-         #   'score_B': score_B,
-        #    'label_H': label_H,
-       #     'label_B': label_B,
-      #  }
-
-    # ─────────────────────────────────────────────────────────────────────
     # CHECKPOINT
     # ─────────────────────────────────────────────────────────────────────
     def save_checkpoint(self, name):
@@ -414,7 +356,7 @@ class Solver:
         print(f"[Checkpoint Saved] {path_H} | {path_B}")
 
     def load_checkpoint(self, name):
-        """✅ Charge les poids — NE recalcule PAS le threshold (utiliser load_threshold())"""
+        """Charge les poids — NE recalcule PAS le threshold (utiliser load_threshold())"""
         path_H = os.path.join(self.ckpt_dir, f"{name}_H.pt")
         path_B = os.path.join(self.ckpt_dir, f"{name}_B.pt")
         if os.path.exists(path_H) and os.path.exists(path_B):
@@ -431,7 +373,7 @@ class Solver:
     # ─────────────────────────────────────────────────────────────────────
     # ANALYSE ESPACE LATENT
     # ─────────────────────────────────────────────────────────────────────
-    def analyze_latent_training(self, interval=1000):
+    def analyze_latent_training(self, interval=1000, prefix=''):
         """
         Analyse the latent space on training data.
         Metrics: Variance, Active dims, Correlation, Entropy, Sparsity, Efficiency.
@@ -462,7 +404,7 @@ class Solver:
         all_z      = np.concatenate(all_z,      axis=0)
 
         def _save(fname):
-            p = os.path.join(self.output_dir, fname)
+            p = os.path.join(self.output_dir, f"{prefix}{fname}")
             plt.tight_layout()
             plt.savefig(p, dpi=300)
             plt.close()
@@ -483,7 +425,7 @@ class Solver:
         np.fill_diagonal(corr, 0)
         mean_correlation = float(np.mean(np.abs(corr)))
 
-        # 4. Entropie gaussienne correcte (depuis logvar)
+        # 4. Entropie gaussienne (depuis logvar)
         entropy_per_dim = 0.5 * np.mean(1 + all_logvar, axis=0)
 
         # 5. Sparsity
@@ -582,7 +524,7 @@ class Solver:
             self.net_H = self.net_B
             results_B = self.analyze_latent_training()
         finally:
-            self.net_H = original_net_H  # toujours restauré même si exception
+            self.net_H = original_net_H
 
         return {"H": results_H, "B": results_B}
 
