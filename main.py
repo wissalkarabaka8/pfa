@@ -23,13 +23,11 @@ def parse_args():
                         help='Chemin vers l\'image à prédire (mode predict uniquement)')
 
     # ── Données ───────────────────────────────────────────────────────────
-    parser.add_argument('--train_dset_dir', type=str, default='./data/train',
-                        help='Dossier des images d\'entraînement')
-    parser.add_argument('--test_dset_dir', type=str, default='./data/test',
-                        help='Dossier des images de test')
-    parser.add_argument('--batch_size', type=int, default=32)
-    parser.add_argument('--image_size', type=int, default=64)
-    parser.add_argument('--num_workers', type=int, default=0)  # 0 obligatoire sur Windows
+    parser.add_argument('--train_dset_dir', type=str, default='./data/train')
+    parser.add_argument('--test_dset_dir',  type=str, default='./data/test')
+    parser.add_argument('--batch_size',     type=int, default=32)
+    parser.add_argument('--image_size',     type=int, default=64)
+    parser.add_argument('--num_workers',    type=int, default=0)
 
     # ── Modèle ────────────────────────────────────────────────────────────
     parser.add_argument('--z_dim',           type=int,   default=16)
@@ -66,14 +64,18 @@ def parse_args():
     return parser.parse_args()
 
 
-def load_single_image(image_path):
-    """Charge une image et la prépare pour le modèle → shape (1, 3, 64, 64)."""
+def load_single_image(image_path, image_size=64):
+    """
+    Charge une image et la prépare pour le modèle.
+    Retourne un tensor de shape (3, 64, 64) — sans batch dimension.
+    ✅ CHANGEMENT : pas de unsqueeze(0) car solver.predict() attend (3,64,64)
+    """
     transform = transforms.Compose([
-        transforms.Resize((64, 64)),
+        transforms.Resize((image_size, image_size)),
         transforms.ToTensor(),
     ])
     img = Image.open(image_path).convert("RGB")
-    return transform(img).unsqueeze(0)
+    return transform(img)  # shape: (3, 64, 64)
 
 
 def main():
@@ -90,6 +92,13 @@ def main():
     print(f"  CUDA       : {args.cuda}")
     print("="*60 + "\n")
 
+    # Reproductibilité : fixer les seeds et rendre cuDNN déterministe lorsque possible
+    torch.manual_seed(42)
+    np.random.seed(42)
+    if args.cuda and torch.cuda.is_available():
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+
     solver = Solver(args)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -98,9 +107,8 @@ def main():
     if args.mode == 'train':
         print("[INFO] Démarrage de l'entraînement...")
         solver.train()
-        # → train() calcule self.threshold automatiquement
+        # train() calcule self.threshold automatiquement
 
-        # Sauvegarder le modèle et le threshold
         solver.save_checkpoint(args.ckpt_name)
         solver.save_threshold()
 
@@ -121,7 +129,6 @@ def main():
         print("[INFO] Évaluation sur le dossier test...")
         results = solver.test()
 
-        # Résumé
         nb_fake_H = sum(1 for r in results if r['label_H'] == 'FAKE')
         nb_real_H = sum(1 for r in results if r['label_H'] == 'REAL')
         nb_fake_B = sum(1 for r in results if r['label_B'] == 'FAKE')
@@ -137,6 +144,7 @@ def main():
 
     # ─────────────────────────────────────────────────────────────────────
     # MODE PREDICT  (une seule image → REAL / FAKE)
+    # ✅ CHANGEMENT : utilise solver.predict() au lieu de predict_single()
     # ─────────────────────────────────────────────────────────────────────
     elif args.mode == 'predict':
         if args.image is None:
@@ -150,16 +158,25 @@ def main():
         solver.load_threshold()
 
         print(f"[INFO] Image : {args.image}")
-        img_tensor = load_single_image(args.image)
 
-        result = solver.predict_single(img_tensor)
+        # ✅ CHANGEMENT : shape (3,64,64) car predict() fait unsqueeze(0) en interne
+        img_tensor = load_single_image(args.image, image_size=args.image_size)
+
+        # ✅ CHANGEMENT : appel à predict() qui existe dans le solver
+        result = solver.predict(img_tensor, solver.threshold)
+
+        # ✅ CHANGEMENT : adapter l'affichage aux clés retournées par predict()
+        # predict() retourne : {'score', 'reconstruction', 'kl', 'anomaly'}
+        label = "FAKE" if result['anomaly'] else "REAL"
 
         print("\n" + "="*60)
         print("  RÉSULTAT")
         print("="*60)
-        print(f"  net_H → {result['label_H']}  (score: {result['score_H']:.4f})")
-        print(f"  net_B → {result['label_B']}  (score: {result['score_B']:.4f})")
-        print(f"  Threshold : {solver.threshold:.4f}")
+        print(f"  Résultat         : {label}")
+        print(f"  Score total      : {result['score']:.4f}")
+        print(f"  Reconstruction   : {result['reconstruction']:.4f}")
+        print(f"  KL divergence    : {result['kl']:.4f}")
+        print(f"  Threshold        : {solver.threshold:.4f}")
         print("="*60)
 
     # ─────────────────────────────────────────────────────────────────────
@@ -180,7 +197,7 @@ def main():
         print(f"  Efficiency      : {results['efficiency_score']:.4f}")
         print(f"  Mean corr       : {results['mean_correlation']:.4f}")
         print(f"  Total variance  : {results['total_variance']:.4f}")
-        print(f"  Graphes sauvés dans : {args.output_dir}/{args.viz_name}/")
+        print(f"  Graphes sauvés  : {args.output_dir}/{args.viz_name}/")
         print("="*60)
 
     # ─────────────────────────────────────────────────────────────────────
