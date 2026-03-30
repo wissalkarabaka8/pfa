@@ -198,17 +198,40 @@ class Solver:
     # ─────────────────────────────────────────────────────────────────────
     # RECONSTRUCTION SCORES
     # ─────────────────────────────────────────────────────────────────────
-    def _recon_scores(self, net, loader):
-        """Calcule l'erreur de reconstruction par image pour tout un loader."""
+    def _anomaly_scores(self, net, loader):
         scores = []
+
         with torch.no_grad():
             for x in loader:
                 x = cuda(x, self.use_cuda)
-                x_recon, *_ = net(x)
+
+                x_recon, mu, logvar, _ = net(x)
+
+                # Reconstruction error
                 recon_dims = list(range(1, x.dim()))
                 recon_error = F.mse_loss(x_recon, x, reduction='none').mean(dim=recon_dims)
-                scores.append(recon_error.cpu().numpy())
+
+                # KL per sample
+                kld = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+                kld = kld.sum(dim=1)
+
+                # FINAL SCORE
+                score = recon_error + self.beta * kld
+
+                scores.append(score.cpu().numpy())
+
         return np.concatenate(scores)
+    #def _recon_scores(self, net, loader):
+     #   """Calcule l'erreur de reconstruction par image pour tout un loader."""
+      #  scores = []
+      #  with torch.no_grad():
+       #     for x in loader:
+        #        x = cuda(x, self.use_cuda)
+         #       x_recon, *_ = net(x)
+          #      recon_dims = list(range(1, x.dim()))
+           #     recon_error = F.mse_loss(x_recon, x, reduction='none').mean(dim=recon_dims)
+            #    scores.append(recon_error.cpu().numpy())
+        #return np.concatenate(scores)
 
     # ─────────────────────────────────────────────────────────────────────
     # THRESHOLD
@@ -218,7 +241,8 @@ class Solver:
         if train_loader is None:
             train_loader = self.data_loader
         self.net_mode(False)
-        scores = self._recon_scores(self.net_H, train_loader)
+        scores = self._anomaly_scores(self.net_H, train_loader)
+        #scores = self._recon_scores(self.net_H, train_loader)
         threshold = np.mean(scores) + 3 * np.std(scores)
         print(f"[Threshold] Computed threshold: {threshold:.4f}")
         return threshold
@@ -270,8 +294,11 @@ class Solver:
 
         self.net_mode(False)
 
-        scores_H = self._recon_scores(self.net_H, test_loader)
-        scores_B = self._recon_scores(self.net_B, test_loader)
+        scores_H = self._anomaly_scores(self.net_H, test_loader)
+        scores_B = self._anomaly_scores(self.net_B, test_loader)
+
+        #scores_H = self._recon_scores(self.net_H, test_loader)
+        #scores_B = self._recon_scores(self.net_B, test_loader)
 
         results = []
         print(f"\n{'='*55}")
@@ -300,51 +327,81 @@ class Solver:
     # ─────────────────────────────────────────────────────────────────────
     # PREDICT  (une seule image → REAL / FAKE)
     # ─────────────────────────────────────────────────────────────────────
-    def predict_single(self, image_tensor, threshold=None):
+
+    def predict(self, x, threshold):
         """
-        Prédit si UNE SEULE image est REAL ou FAKE.
-
-        Parameters
-        ----------
-        image_tensor : torch.Tensor de shape (1, 3, 64, 64)
-        threshold    : float (utilise self.threshold si non fourni)
-
-        Returns
-        -------
-        dict avec score_H, score_B, label_H, label_B
+        Predict if a single input is anomaly or normal
         """
-        if threshold is None:
-            if self.threshold is None:
-                print("[WARNING] Threshold non calculé — lancement de compute_threshold()...")
-                self.threshold = self.compute_threshold()
-            threshold = self.threshold
-
         self.net_mode(False)
+
         with torch.no_grad():
-            image_tensor = cuda(image_tensor, self.use_cuda)
-            recon_dims = list(range(1, image_tensor.dim()))
+            x = cuda(x.unsqueeze(0), self.use_cuda)
 
-            x_recon_H, *_ = self.net_H(image_tensor)
-            score_H = F.mse_loss(x_recon_H, image_tensor, reduction='none').mean(dim=recon_dims).item()
+            x_recon, mu, logvar, _ = self.net_H(x)
 
-            x_recon_B, *_ = self.net_B(image_tensor)
-            score_B = F.mse_loss(x_recon_B, image_tensor, reduction='none').mean(dim=recon_dims).item()
+            # Reconstruction
+            recon_error = F.mse_loss(x_recon, x, reduction='mean')
 
-        label_H = "FAKE" if score_H > threshold else "REAL"
-        label_B = "FAKE" if score_B > threshold else "REAL"
+            # KL
+            kld = -0.5 * (1 + logvar - mu.pow(2) - logvar.exp())
+            kld = kld.sum()
 
-        print(f"\n{'='*40}")
-        print(f"  Threshold  : {threshold:.4f}")
-        print(f"  Score H    : {score_H:.4f}  →  {label_H}")
-        print(f"  Score B    : {score_B:.4f}  →  {label_B}")
-        print(f"{'='*40}")
+            # Score
+            score = recon_error + self.beta * kld
+
+            is_anomaly = score.item() > threshold
 
         return {
-            'score_H': score_H,
-            'score_B': score_B,
-            'label_H': label_H,
-            'label_B': label_B,
+            "score": score.item(),
+            "reconstruction": recon_error.item(),
+            "kl": kld.item(),
+            "anomaly": is_anomaly
         }
+    #def predict_single(self, image_tensor, threshold=None):
+     #   """
+      #  Prédit si UNE SEULE image est REAL ou FAKE.
+
+       # Parameters
+        #----------
+        #image_tensor : torch.Tensor de shape (1, 3, 64, 64)
+        #threshold    : float (utilise self.threshold si non fourni)
+
+        #Returns
+        #-------
+        #dict avec score_H, score_B, label_H, label_B
+        #"""
+        #if threshold is None:
+         #   if self.threshold is None:
+          #      print("[WARNING] Threshold non calculé — lancement de compute_threshold()...")
+           #     self.threshold = self.compute_threshold()
+            #threshold = self.threshold
+
+        #self.net_mode(False)
+        #with torch.no_grad():
+         #   image_tensor = cuda(image_tensor, self.use_cuda)
+          #  recon_dims = list(range(1, image_tensor.dim()))
+
+           # x_recon_H, *_ = self.net_H(image_tensor)
+           # score_H = F.mse_loss(x_recon_H, image_tensor, reduction='none').mean(dim=recon_dims).item()
+
+          #  x_recon_B, *_ = self.net_B(image_tensor)
+         #   score_B = F.mse_loss(x_recon_B, image_tensor, reduction='none').mean(dim=recon_dims).item()
+
+        #label_H = "FAKE" if score_H > threshold else "REAL"
+        #label_B = "FAKE" if score_B > threshold else "REAL"
+
+        #print(f"\n{'='*40}")
+        #print(f"  Threshold  : {threshold:.4f}")
+        #print(f"  Score H    : {score_H:.4f}  →  {label_H}")
+        #print(f"  Score B    : {score_B:.4f}  →  {label_B}")
+        #print(f"{'='*40}")
+
+        #return {
+          #  'score_H': score_H,
+         #   'score_B': score_B,
+        #    'label_H': label_H,
+       #     'label_B': label_B,
+      #  }
 
     # ─────────────────────────────────────────────────────────────────────
     # CHECKPOINT
