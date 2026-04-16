@@ -415,7 +415,7 @@ class Solver:
         total_variance = float(np.sum(dim_variance))
 
         # 2. Active dimensions
-        active_dims     = dim_variance > 0.01
+        active_dims     = dim_variance > 0.04
         num_active_dims = int(np.sum(active_dims))
         active_ratio    = num_active_dims / self.z_dim
 
@@ -488,7 +488,7 @@ class Solver:
         _save('latent_sparsity.png')
 
         fig, ax = plt.subplots(figsize=(10, 5))
-        dimension_counts = np.sum(np.abs(all_z) > 0.01, axis=0)
+        dimension_counts = np.sum(np.abs(all_z) > 0.04, axis=0)
         ax.bar(range(len(dimension_counts)), dimension_counts, color='blue')
         ax.set_title("Frequency of Active Values per Latent Dimension")
         ax.set_xlabel("Latent Dimension"); ax.set_ylabel("Count over dataset"); ax.grid(True)
