@@ -73,7 +73,7 @@ def return_data(folder_path, batch_size=32, shuffle=True,
 
 
 if __name__ == '__main__':
-    folder_path = r'./data/train'
+    folder_path = r'./data/all_data'
     loader = return_data(folder_path, batch_size=32)
     images = next(iter(loader))
     print("Shape du batch:", images.shape)
